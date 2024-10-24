@@ -1,0 +1,87 @@
+#!/usr/bin/env bash
+# SFTP restriction for Linux, based on user namespaces and bind mounts.
+# David Leadbeater, 2024 -- https://dgl.cx/0bsd -- NO WARRANTY.
+
+# To configure this, copy this file to ~/bin/sftp-ssh-limit, then set up an SSH
+# key in ~/.ssh/authorized_keys with the following options (edit the line to
+# add these before the key) where $HOME/Media, etc. are the directories to
+# allow access to:
+#
+# restrict,command="$HOME/bin/sftp-ssh-limit $HOME/Media $HOME/Pictures" ssh-ed25519...rest-of-key-all-on-one-line
+#
+# You may also add -R before the list of directories to make the key act as read-only.
+
+exec unshare -Unrmp --fork --kill-child --mount-proc bash -c '
+set -eu
+
+readonly=0
+
+for opt in "$@"; do
+  if [[ ${opt:0:1} == "-" ]]; then
+    shift
+    case "${opt:1:1}" in
+      R) readonly=1
+      ;;
+      -) break
+      ;;
+      *) echo "$0: Unknown option: $opt"
+      ;;
+    esac
+  fi
+done
+
+# Create a limited size tmpfs.
+mount -t tmpfs -o size=1M none /tmp
+# As this is a tmpfs inside this mount namespace, no need for mktemp.
+NEWROOT=/tmp
+
+# Create a basic skeleton chroot-like within the new root.
+mkdir -p $NEWROOT/{dev,etc,usr/lib,usr/lib64,$HOME}
+
+if [[ -e /etc/nixos ]] && [[ -d /nix ]]; then
+  # NixOS, we find the sftp-server binary in the store, but mount the whole store.
+  SFTP_SERVER="$(nix-store --query $(which ssh))/libexec/sftp-server"
+  mkdir -p $NEWROOT/nix/store
+  mount --bind /nix/store $NEWROOT/nix/store
+else
+  # This assumes a modern Debian/Ubuntu layout where most files are in /usr,
+  # with /usr/lib/sftp-server our desired binary.
+  SFTP_SERVER="/usr/lib/sftp-server"
+  mount --bind /usr/lib $NEWROOT/usr/lib
+  mount --bind /usr/lib64 $NEWROOT/usr/lib64
+  ln -s usr/lib $NEWROOT/lib
+  ln -s usr/lib64 $NEWROOT/lib64
+fi
+
+# We need /dev/null for sftp, just like a chroot.
+touch $NEWROOT/dev/null
+mount --bind /dev/null $NEWROOT/dev/null
+
+# Remove these if you want to avoid leaking users (but you will just see UIDs in sftp output):
+cp /etc/passwd $NEWROOT/etc/passwd
+cp /etc/group $NEWROOT/etc/group
+
+# Create mount points for the paths the user wishes to access.
+for dest in "$@"; do
+  mkdir -p "$NEWROOT/$dest"
+done
+
+# Make /tmp readonly, not needed for security, but avoids the user accidentally
+# uploading files to places which are writable but backed by a tmpfs.
+mount --rbind -o ro /tmp /tmp
+
+# Bind mount all the paths the user wishes to access.
+ro=""
+[[ $readonly == 1 ]] && ro="-o ro"
+for dest in "$@"; do
+  mount --bind $ro "$dest" $NEWROOT/"$dest"
+done
+
+# Umount /proc, this will not be visible anyway but not having it in the mount
+# namespace may provide defense-in-depth.
+umount /proc
+
+opt=""
+[[ $readonly == 1 ]] && opt="-R"
+
+exec unshare -R "$NEWROOT" -w "$HOME" --map-user=$(id -u $USER) --map-group=$(id -g $USER) -- "$SFTP_SERVER" $opt' -- "$@"
