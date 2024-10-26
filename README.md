@@ -8,7 +8,7 @@ To configure this, copy `sftp-ssh-limit` to `~/bin/sftp-ssh-limit`:
 
 ```console
 mkdir -p ~/bin
-curl -Lo ~/bin/sftp-ssh-limit https://raw.github.com/dgl/sftp-ssh-limit/sftp-ssh-limit
+curl -Lo ~/bin/sftp-ssh-limit https://raw.github.com/dgl/sftp-ssh-limit/refs/heads/main/sftp-ssh-limit
 chmod 755 ~/bin/sftp-ssh-limit
 ```
 
