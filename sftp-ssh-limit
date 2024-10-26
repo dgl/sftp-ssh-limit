@@ -72,9 +72,9 @@ mount --rbind -o ro /tmp /tmp
 
 # Bind mount all the paths the user wishes to access.
 ro=""
-[[ $readonly == 1 ]] && ro="-o ro"
+[[ $readonly == 1 ]] && ro=",ro"
 for dest in "$@"; do
-  mount --bind $ro "$dest" $NEWROOT/"$dest"
+  mount --bind -o noexec${ro} "$dest" $NEWROOT/"$dest"
 done
 
 # Umount /proc, this will not be visible anyway but not having it in the mount
